@@ -1,6 +1,7 @@
 import os
 import subprocess
 import uuid
+import sys
 
 import nest_asyncio
 import uvicorn
@@ -28,6 +29,7 @@ class ColabCode:
         mount_drive=False,
         code=True,
         lab=False,
+        tunnel="ngrok"
     ):
         self.port = port
         self.password = password
@@ -35,14 +37,26 @@ class ColabCode:
         self._mount = mount_drive
         self._code = code
         self._lab = lab
-        if self._lab:
-            self._start_server()
-            self._run_lab()
-        if self._code:
-            self._install_code()
-            self._install_extensions()
-            self._start_server()
-            self._run_code()
+        self.tunnel = tunnel
+        if tunnel == "localtunnel":
+            self._install_localtunnel()
+        self.connection = None
+        try:
+            if self._lab:
+                self._start_server()
+                self._run_lab()
+            if self._code:
+                self._install_code()
+                self._install_extensions()
+                self._start_server()
+                self._run_code()
+        except KeyboardInterrupt:
+            if self.tunnel == "localtunnel" and self.connection:
+                try:
+                    self.connection.kill()
+                except:
+                    pass
+            sys.exit(0)
 
     @staticmethod
     def _install_code():
@@ -53,6 +67,14 @@ class ColabCode:
             ["sh", "install.sh", "--version", f"{CODESERVER_VERSION}"],
             stdout=subprocess.PIPE,
         )
+        subprocess.run(
+            ["rm", "-rf", "install.sh"],
+            stdout=subprocess.PIPE,
+        )
+
+    @staticmethod
+    def _install_localtunnel():
+        subprocess.run(["npm", "install", "-g", "localtunnel"], stdout=subprocess.PIPE)
 
     @staticmethod
     def _install_extensions():
@@ -60,17 +82,26 @@ class ColabCode:
             subprocess.run(["code-server", "--install-extension", f"{ext}"])
 
     def _start_server(self):
-        if self.authtoken:
-            ngrok.set_auth_token(self.authtoken)
-        active_tunnels = ngrok.get_tunnels()
-        for tunnel in active_tunnels:
-            public_url = tunnel.public_url
-            ngrok.disconnect(public_url)
-        url = ngrok.connect(addr=self.port, options={"bind_tls": True})
-        if self._code:
-            print(f"Code Server can be accessed on: {url}")
+        if self.tunnel == "ngrok":
+            if self.authtoken:
+                ngrok.set_auth_token(self.authtoken)
+            active_tunnels = ngrok.get_tunnels()
+            for tunnel in active_tunnels:
+                public_url = tunnel.public_url
+                ngrok.disconnect(public_url)
+            url = ngrok.connect(addr=self.port, options={"bind_tls": True})
+            if self._code:
+                print(f"Code Server can be accessed on: {url}")
+            else:
+                print(f"Public URL: {url}")
+        elif self.tunnel == "localtunnel":
+            connection = subprocess.Popen(["lt", "--port", str(self.port)], stdout=subprocess.PIPE)
+            for line in iter(connection.stdout.readline, ''):
+                print(line.rstrip().decode())
+                break
+            self.connection = connection
         else:
-            print(f"Public URL: {url}")
+            raise Exception(f"mode is invalid: {self.tunnel}")
 
     def _run_lab(self):
         token = str(uuid.uuid1())
